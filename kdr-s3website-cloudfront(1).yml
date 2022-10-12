@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+################################################################################
+#
+#   DESCRIPTION
+#   A text string that describes the template. This section must always follow
+#   the template format version section.
+#
+################################################################################
+Description: >-
+  This CloudFormation template creates a S3 buckets, CloudFront Distribution,
+  CloudFront Origin Access Identity, CodeCommit Repository and a CodePipeline
+  pipeline.
+################################################################################
+#
+#   PARAMETERS
+#   Values to pass to your template at runtime (when you create or update a
+#   stack). You can refer to parameters from the Resources and Outputs sections
+#   of the template.
+#
+################################################################################
+Parameters:
+  pDomainName:
+    Type: String
+    Description: >-
+      A name for the domain - this will be used to create an S3 bucket.
+    Default: 03octoberbucket
+################################################################################
+#
+#   METADATA
+#   Objects that provide additional information about the template.
+#
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Operations
+        Parameters:
+          - pDomainName
+    ParameterLabels:
+      pDomainName:
+        default: Domain Name
+################################################################################
+#
+#   RESOURCES
+#   Specifies the stack resources and their properties. You can refer to
+#   resources in the Resources and Outputs sections of the template.
+#
+################################################################################
+Resources:
+  rS3WebsiteBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub ${pDomainName}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      LoggingConfiguration:
+        DestinationBucketName: !Sub ${pDomainName}-${AWS::AccountId}-logging
+        LogFilePrefix: !Sub ${pDomainName}-${AWS::AccountId}
+      Tags:
+        - Key: Name
+          Value: !Sub ${pDomainName}-${AWS::AccountId}
+
+  rS3WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref rS3WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Id: 'PolicyForCloudFrontPrivateContent'
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${pDomainName}-${AWS::AccountId}/*'
+            Principal:
+              AWS: !Sub 'arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${rCloudFrontOriginIdentity}'
+
+  rS3LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: LogDeliveryWrite
+      BucketName: !Sub ${pDomainName}-${AWS::AccountId}-logging
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      LoggingConfiguration:
+        DestinationBucketName: !Sub ${pDomainName}-${AWS::AccountId}-logging
+        LogFilePrefix: !Sub ${pDomainName}-${AWS::AccountId}-logging
+      Tags:
+        - Key: Name
+          Value: !Sub ${pDomainName}-${AWS::AccountId}-logging
+
+  rCloudFrontOriginIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub '${pDomainName} access-identity'
+
+  rPublicDistribution:
+    DependsOn: rCloudFrontOriginIdentity
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Ref pDomainName
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          TargetOriginId: !GetAtt rS3WebsiteBucket.DomainName
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: 'index.html'
+        Enabled: true
+        HttpVersion: http2
+        Logging:
+          Bucket: !GetAtt rS3LoggingBucket.DomainName
+          IncludeCookies: false
+          Prefix: !Sub '${pDomainName}/cloudfront'
+        Origins:
+          - DomainName: !GetAtt rS3WebsiteBucket.DomainName
+            Id: !GetAtt rS3WebsiteBucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${rCloudFrontOriginIdentity}'
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+ 
+
+################################################################################
+#
+#   OUTPUTS
+#
+################################################################################
+Outputs:
+  S3WebsiteBucket:
+    Value: !GetAtt rS3WebsiteBucket.Arn
+  S3LoggingBucketArn:
+    Value: !GetAtt rS3LoggingBucket.Arn
+  CloudFrontDomainName:
+    Value: !GetAtt rPublicDistribution.DomainName
